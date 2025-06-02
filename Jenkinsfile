@@ -40,7 +40,7 @@ pipeline {
                         // Method 2: Alternative using withCredentials
                         withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                             sh """
-                                chmod 600 \${SSH_KEY}
+                                chmod 400 \${SSH_KEY}
                                 ssh -i \${SSH_KEY} \
                                     -o StrictHostKeyChecking=no \
                                     -o UserKnownHostsFile=/dev/null \
