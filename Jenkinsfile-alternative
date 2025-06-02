@@ -1,0 +1,129 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    stages {
+        stage('build') {
+            steps {
+                script {
+                    echo "Building the application..."
+                }
+            }
+        }
+        stage('test') {
+            steps {
+                script {
+                    echo "Testing the application..."
+                }
+            }
+        }
+        stage('deploy') {
+            steps {
+                script {
+                    def dockerCMD = 'docker run -d -p 5000:5000 khaledhawil/flask-app'
+                    def serverIP = '54.191.105.177'
+                    def username = 'ec2-user'
+                    
+                    echo "Attempting deployment to ${serverIP}..."
+                    
+                    // Method 1: Try sshagent (your current method)
+                    try {
+                        echo "Trying sshagent method..."
+                        sshagent(['ec2-ssh']) {
+                            sh """
+                                echo "Testing SSH connection..."
+                                ssh -o StrictHostKeyChecking=no \
+                                    -o UserKnownHostsFile=/dev/null \
+                                    -o ConnectTimeout=30 \
+                                    -o ServerAliveInterval=10 \
+                                    ${username}@${serverIP} 'echo "SSH connection successful"'
+                                
+                                echo "Executing Docker command..."
+                                ssh -o StrictHostKeyChecking=no \
+                                    -o UserKnownHostsFile=/dev/null \
+                                    -o ConnectTimeout=30 \
+                                    ${username}@${serverIP} \
+                                    '${dockerCMD}'
+                            """
+                        }
+                        echo "✅ Deployment successful using sshagent!"
+                        
+                    } catch (Exception e) {
+                        echo "❌ sshagent method failed: ${e.getMessage()}"
+                        echo "Trying alternative method..."
+                        
+                        // Method 2: Using withCredentials
+                        try {
+                            withCredentials([sshUserPrivateKey(
+                                credentialsId: 'ec2-ssh', 
+                                keyFileVariable: 'SSH_KEY', 
+                                usernameVariable: 'SSH_USER'
+                            )]) {
+                                sh """
+                                    echo "Setting up SSH key permissions..."
+                                    chmod 600 \${SSH_KEY}
+                                    
+                                    echo "Testing SSH connection with key file..."
+                                    ssh -i \${SSH_KEY} \
+                                        -o StrictHostKeyChecking=no \
+                                        -o UserKnownHostsFile=/dev/null \
+                                        -o ConnectTimeout=30 \
+                                        ${username}@${serverIP} 'echo "SSH connection successful"'
+                                    
+                                    echo "Executing Docker command..."
+                                    ssh -i \${SSH_KEY} \
+                                        -o StrictHostKeyChecking=no \
+                                        -o UserKnownHostsFile=/dev/null \
+                                        -o ConnectTimeout=30 \
+                                        ${username}@${serverIP} \
+                                        '${dockerCMD}'
+                                """
+                            }
+                            echo "✅ Deployment successful using withCredentials!"
+                            
+                        } catch (Exception e2) {
+                            echo "❌ withCredentials method also failed: ${e2.getMessage()}"
+                            
+                            // Method 3: Using SSH Pipeline Steps plugin (if available)
+                            try {
+                                echo "Trying SSH Pipeline Steps method..."
+                                sshCommand remote: [
+                                    name: 'ec2-server',
+                                    host: serverIP,
+                                    user: username,
+                                    identityFile: '/var/jenkins_home/.ssh/ec2-key'
+                                ], command: dockerCMD
+                                echo "✅ Deployment successful using SSH Pipeline Steps!"
+                                
+                            } catch (Exception e3) {
+                                echo "❌ All SSH methods failed!"
+                                echo "Please check the troubleshooting guide."
+                                currentBuild.result = 'FAILURE'
+                                error("SSH deployment failed with all methods")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        failure {
+            echo """
+            🔧 SSH Deployment Failed - Troubleshooting Steps:
+            
+            1. Check SSH key format in Jenkins credentials
+            2. Verify EC2 instance is running and accessible
+            3. Ensure security groups allow SSH (port 22)
+            4. Check if the private key matches the public key on EC2
+            5. Try regenerating SSH keys if the issue persists
+            
+            For detailed troubleshooting, check the ssh-troubleshooting.sh file
+            """
+        }
+        success {
+            echo "🎉 Deployment completed successfully!"
+        }
+    }
+}
